@@ -51,7 +51,7 @@ def sql_generator_node(state: dict) -> dict:
 
     llm = get_llm()
     messages = [
-            SystemMessage(content=f"""You are an expert SQL agent for SQLite.
+            SystemMessage(content=f"""You are an expert SQL agent for PostgreSQL.
     Your job is to write a single SQL SELECT query to answer the user's question.
 
     SCHEMA:
@@ -59,13 +59,21 @@ def sql_generator_node(state: dict) -> dict:
 
     PLAN:
     {state['plan']}
+        STRICT RULES:
+        1. Return ONLY the raw SQL query — no explanation, no markdown, no backticks
+        2. Only SELECT queries — never INSERT, UPDATE, DELETE, DROP
+        3. Use PostgreSQL-compatible SQL syntax only
+        
+        STRICT SCHEMA ENFORCEMENT:
+        - Table names are case-sensitive. Use them EXACTLY as shown.
+        - Column names are case-sensitive. Use them EXACTLY as shown.
+        - Do NOT change case (orders ≠ Orders).
+        - Do NOT remove underscores (customer_id ≠ customerid).
+        - Do NOT invent tables or columns.
+        - If a required table or column is missing, return: CANNOT_ANSWER.
 
-    STRICT RULES:
-    1. Return ONLY the raw SQL query — no explanation, no markdown, no backticks
-    2. Only SELECT queries — never INSERT, UPDATE, DELETE, DROP
-    3. Use exact table and column names from the schema
-    4. Use proper SQLite syntax
-    5. If you cannot answer, reply exactly: CANNOT_ANSWER"""),
+        You MUST ONLY use names present in the schema."""), 
+
             HumanMessage(content=state['question'])
         ]
     response = llm.invoke(messages)
@@ -76,6 +84,28 @@ def sql_generator_node(state: dict) -> dict:
         "sql": sql,
         "status": "executing"
     }
+
+def validate_sql_against_schema(sql: str, schema: str):
+    """
+    Simple validation:
+    checks if table.column references exist in schema
+    """
+
+    sql_lower = sql.lower()
+    schema_lower = schema.lower()
+
+    tokens = sql_lower.replace(",", " ").replace("\n", " ").split()
+
+    for token in tokens:
+        if "." in token:
+            token = token.strip()
+
+            token = token.replace("(", "").replace(")", "")
+
+            if token not in schema_lower:
+                return False, f"Invalid reference: {token}"
+
+    return True, None
 
 def executor_node(state: dict) -> dict:
     sql = state.get('sql', '').strip()
@@ -119,9 +149,9 @@ def self_corrector_node(state: dict) -> dict:
     llm = get_llm()
 
     messages = [
-        SystemMessage(content=f"""You are an expert SQL debugger for SQLite.
+        SystemMessage(content=f"""You are an expert SQL debugger for SQL.
         A SQL query failed. Fix it and return ONLY the corrected SQL query.
-        No explanation, no markdown, no backticks.
+        No explanation, no markdown, no backticks.  
 
         SCHEMA:
         {state['schema']}"""),
@@ -163,5 +193,4 @@ def should_retry(state: dict) -> str:
     else:
         return "retry"
     
-
 
